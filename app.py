@@ -13,7 +13,7 @@ st.title("Automated ISO GPS Quality Gate & R&D Audit Report")
 
 with st.sidebar:
     api_key = st.secrets.get("OPENAI_API_KEY")
-    base_url = "https://api.anyapi.ai/v1"
+    base_url = "https://api.xkiro.com/v1"
     model_name = "google/gemini-3.6-flash"
 
 col1, col2 = st.columns(2)
