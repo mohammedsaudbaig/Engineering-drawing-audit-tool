@@ -1,59 +1,40 @@
 import streamlit as st
-import openai # We will use OpenAI as the reasoning engine
+import openai
+import base64
 
-# Configure the page
 st.set_page_config(page_title="NEO 1.5 Quality Gate", layout="wide")
 st.title("NEO 1.5 Automated ISO GPS Quality Gate")
-st.subheader("Mass Production / QC Release Audit Engine")
 
-# Sidebar for Setup
 with st.sidebar:
     st.header("Configuration")
-        # Pulls directly from your secure Streamlit settings
-    api_key = st.secrets["OPENAI_API_KEY"]
-    part_type = st.selectbox("Select Part Functional Interface:", 
-                             ["Machined Prismatic", "Rotating Dynamic (Shaft/Hub)", "Sheet Metal/Weldment"])
+    api_key = st.secrets.get("OPENAI_API_KEY") # We keep the secret name, but it holds your AnyAPI key
+    # Gemini models often require different naming conventions
+    model_name = st.text_input("Model Name", value="google/gemini-3.6-flash") 
 
-# Master System Prompt (The "Engine Brain")
-SYSTEM_PROMPT = """
-You are an expert Principal Mechanical Systems Architect and ISO GPS Advisor. 
-Your goal is the final Pre-Release Quality Gate for high-reliability mobile robot components.
-
-Task: Perform an In-Depth ISO GPS Audit on the provided engineering drawing/image.
-
-Operational Workflow:
-1. Kinematic Datum Analysis (ISO 5459): Define the 3-2-1 Datum Reference Frame (DRF). 
-   Primary [A]: Main mating plane/axis. Secondary [B]: Locating hole/spigot. Tertiary [C]: Clocking edge.
-2. ISO Integrity Rules: 
-   - Independence Principle (ISO 8015): Flag implicit coupling of size/form.
-   - Envelope Requirement (ISO 14405-1): Mandate Envelope Modifier Ⓔ for all fit symbols.
-   - Datum Syntax (ISO 1101): Ensure no form control references a datum.
-3. Output Generation: Produce a structured Markdown table with 3 columns:
-   - Feature/Control Frame
-   - Audit Finding (Pass/Fail)
-   - Production-Ready Fix (Exact instructions for Creo 7.0)
-"""
-
-# Main Interface
-uploaded_file = st.file_uploader("Upload Drawing PDF or Screenshot", type=["pdf", "png", "jpg", "jpeg"])
+uploaded_file = st.file_uploader("Upload Drawing", type=["png", "jpg", "jpeg"])
 
 if uploaded_file and api_key:
     if st.button("Generate Audit Report"):
-                # You MUST get the Base URL from your API provider's dashboard
-        client = openai.OpenAI(
-            api_key=api_key, 
-            base_url="https://api.anyapi.ai/v1" # <--- REPLACE WITH YOUR PROVIDER'S URL
-        )
-        
-        with st.spinner("Analyzing part geometry and ISO compliance..."):
-            # Here we send the image and the prompt to the AI
-            response = client.chat.completions.create(
-                model="gpt-4o", # Best for vision-based engineering audits
-                messages=[
-                    {"role": "system", "content": SYSTEM_PROMPT},
-                    {"role": "user", "content": f"Audit this part classified as {part_type}. Provide a clear, actionable audit report."}
-                ]
+        try:
+            # Convert image
+            bytes_data = uploaded_file.getvalue()
+            base64_image = base64.b64encode(bytes_data).decode('utf-8')
+            
+            client = openai.OpenAI(
+                api_key=api_key, 
+                base_url="https://api.anyapi.ai/v1"
             )
-            st.markdown(response.choices[0].message.content)
-elif not api_key:
-    st.warning("Please enter your OpenAI API key in the sidebar to activate the audit engine.")
+            
+            with st.spinner("Analyzing with Gemini..."):
+                response = client.chat.completions.create(
+                    model=model_name,
+                    messages=[
+                        {"role": "user", "content": [
+                            {"type": "text", "text": "You are an expert ISO GPS Mechanical Systems Architect. Analyze this drawing. 1. Classify functionality. 2. Audit 3-2-1 Datum Reference Frame. 3. Check for syntax errors (ISO 1101/8015). Output a Markdown table: Feature | Audit Finding | Production Fix."},
+                            {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}}
+                        ]}
+                    ]
+                )
+                st.markdown(response.choices[0].message.content)
+        except Exception as e:
+            st.error(f"Engine Error: {str(e)}")
