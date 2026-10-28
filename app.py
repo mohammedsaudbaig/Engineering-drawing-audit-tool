@@ -1,19 +1,16 @@
 import streamlit as st
-import openai
-import base64
+import requests
 import fitz
-from PIL import Image
 import io
 import json
-import textwrap
+from PIL import Image
 
 st.set_page_config(page_title="NEO 1.5 Quality Gate", layout="wide")
 st.title("Automated ISO GPS Quality Gate")
 
 with st.sidebar:
     api_key = st.secrets.get("OPENAI_API_KEY")
-    base_url = "https://api.xkiro.com/v1"
-    model_name = "google/gemini-3.6-flash"
+    api_url = "https://api.xkiro.com/v1/chat/completions" # Direct endpoint
 
 drawing_file = st.file_uploader("Upload Drawing", type=["png", "jpg", "jpeg", "pdf"])
 
@@ -21,7 +18,7 @@ if drawing_file and api_key:
     if st.button("Generate Pro Audit Report", type="primary"):
         with st.spinner("Processing..."):
             try:
-                # 1. Local Image Processing (No API call for this part)
+                # 1. Process Image
                 file_bytes = drawing_file.read()
                 if drawing_file.name.lower().endswith(".pdf"):
                     doc = fitz.open(stream=file_bytes, filetype="pdf")
@@ -30,20 +27,22 @@ if drawing_file and api_key:
                 else:
                     img = Image.open(io.BytesIO(file_bytes)).convert("RGB")
                 
-                # 2. Optimized API call (Text only, descriptive)
-                client = openai.OpenAI(api_key=api_key, base_url=base_url)
+                # 2. Raw HTTP Request (Bypasses OpenAI library issues)
+                headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+                payload = {
+                    "model": "google/gemini-3.6-flash",
+                    "messages": [{"role": "user", "content": "Analyze drawing for ISO GPS violations. Return valid JSON only: [{'tag_id': 1, 'action': 'MODIFY', 'issue': '...', 'replacement_text': '...'}]"}]
+                }
                 
-                # We describe the task, we don't send the heavy image
-                prompt = "Act as an ISO GPS expert. Provide a JSON-only response for audit of a mechanical drawing: [{'tag_id': 1, 'action': 'MODIFY', 'issue': 'Typo in revision', 'replacement_text': 'R5'}]."
+                response = requests.post(api_url, headers=headers, json=payload, timeout=60)
                 
-                response = client.chat.completions.create(
-                    model=model_name,
-                    messages=[{"role": "user", "content": prompt}]
-                )
-                
-                audit_data = json.loads(response.choices[0].message.content)
+                if response.status_code != 200:
+                    st.error(f"API Error ({response.status_code}): {response.text}")
+                    st.stop()
 
-                # 3. PDF Generation (Internal)
+                audit_data = json.loads(response.json()['choices'][0]['message']['content'])
+
+                # 3. PDF generation
                 pdf = fitz.open()
                 p1 = pdf.new_page(width=img.width, height=img.height)
                 img_bytes = io.BytesIO()
@@ -53,12 +52,11 @@ if drawing_file and api_key:
                 report = pdf.new_page(width=612, height=792)
                 y = 50
                 for item in audit_data:
-                    report.insert_text((50, y), f"TAG #{item['tag_id']} | {item['issue']}", fontsize=12)
-                    y += 20
-                    report.insert_text((50, y), f"FIX: {item['replacement_text']}", fontsize=10, fontname="cour")
+                    report.insert_text((50, y), f"TAG #{item['tag_id']} | {item['action']}: {item['issue']}", fontsize=12)
                     y += 30
+                    report.insert_text((50, y), f"FIX: {item['replacement_text']}", fontsize=10)
+                    y += 40
                 
-                st.download_button("📥 Download Final Audit Report", data=pdf.write(), file_name="ISO_AUDIT.pdf", mime="application/pdf")
-                st.success("Audit complete.")
+                st.download_button("📥 Download Audit Report", data=pdf.write(), file_name="ISO_AUDIT.pdf", mime="application/pdf")
             except Exception as e:
-                st.error(f"Engine Error: {e}")
+                st.error(f"Failed: {e}")
