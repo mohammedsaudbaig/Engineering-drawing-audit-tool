@@ -1,56 +1,71 @@
 import streamlit as st
-import google.generativeai as genai
+import openai
+import base64
+import fitz  # PyMuPDF
 from PIL import Image
 import io
-import fitz
 import json
+import re
 
-st.set_page_config(page_title="NEO 1.5 Quality Gate", layout="wide")
+st.set_page_config(page_title="Quality Gate", layout="wide")
 st.title("Automated ISO GPS Quality Gate")
 
-# 1. Config: Use Gemini native SDK
 with st.sidebar:
-    api_key = st.secrets.get("GEMINI_API_KEY")
-    genai.configure(api_key=api_key)
-    model = genai.GenerativeModel('gemini-1.5-flash') # Native, stable model
+    st.header("Configuration")
+    api_key = st.secrets.get("OPENAI_API_KEY")
+    base_url = st.text_input("API Base URL", value="https://api.xkiro.com/v1")
+    model_name = st.text_input("Model Name", value="google/gemini-3.6-flash")
 
-drawing_file = st.file_uploader("Upload Drawing", type=["png", "jpg", "jpeg", "pdf"])
+uploaded_file = st.file_uploader("Upload Drawing", type=["png", "jpg", "jpeg", "pdf"])
 
-if drawing_file and api_key:
-    if st.button("Generate Pro Audit Report"):
-        with st.spinner("Processing..."):
-            try:
-                # Process File
-                file_bytes = drawing_file.read()
-                if drawing_file.name.lower().endswith(".pdf"):
+if uploaded_file and api_key:
+    if st.button("Generate Audit Report", type="primary"):
+        try:
+            with st.spinner("Processing file..."):
+                file_bytes = uploaded_file.read()
+                
+                # Robust Conversion: PDF to Image using fitz more safely
+                if uploaded_file.name.lower().endswith(".pdf"):
                     doc = fitz.open(stream=file_bytes, filetype="pdf")
-                    pix = doc[0].get_pixmap(matrix=fitz.Matrix(2, 2))
+                    page = doc.load_page(0) 
+                    pix = page.get_pixmap(matrix=fitz.Matrix(2, 2)) # 2x zoom for clarity
                     img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+                    buffer = io.BytesIO()
+                    img.save(buffer, format="JPEG")
+                    img_bytes = buffer.getvalue()
                 else:
-                    img = Image.open(io.BytesIO(file_bytes)).convert("RGB")
-                
-                # Native Generation
-                prompt = "Analyze this drawing for ISO GPS violations (ISO 1101, 5459, 14405-1). Return STRICT JSON format: [{\"tag_id\": 1, \"action\": \"DELETE|MODIFY|ADD\", \"box_2d\": [ymin, xmin, ymax, xmax], \"issue\": \"...\", \"replacement_text\": \"...\"}]"
-                
-                response = model.generate_content([prompt, img])
-                audit_data = json.loads(response.text.replace("```json", "").replace("```", "").strip())
+                    img_bytes = file_bytes
+                    img = Image.open(io.BytesIO(img_bytes)).convert("RGB")
+                    buffer = io.BytesIO()
+                    img.save(buffer, format="JPEG")
+                    img_bytes = buffer.getvalue()
 
-                # PDF Report (Internal)
-                pdf = fitz.open()
-                p1 = pdf.new_page(width=img.width, height=img.height)
-                img_buf = io.BytesIO()
-                img.save(img_buf, format="JPEG")
-                p1.insert_image(p1.rect, stream=img_buf.getvalue())
+                base64_image = base64.b64encode(img_bytes).decode("utf-8")
+
+            client = openai.OpenAI(api_key=api_key, base_url=base_url)
+
+            with st.spinner("Analyzing..."):
+                response = client.chat.completions.create(
+                    model=model_name,
+                    messages=[
+                        {"role": "user", "content": [
+                            {"type": "text", "text": "Analyze this drawing as an ISO GPS expert. Return ONLY valid JSON: [{\"tag_id\": 1, \"action\": \"DELETE|MODIFY|ADD\", \"box_2d\": [ymin, xmin, ymax, xmax], \"current_text\": \"...\", \"issue\": \"...\", \"replacement_text\": \"...\"}]"},
+                            {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}}
+                        ]}
+                    ]
+                )
                 
-                report = pdf.new_page(width=595, height=842)
-                y = 50
-                for item in audit_data:
-                    report.insert_text((50, y), f"TAG #{item['tag_id']} | {item['issue']}", fontsize=12)
-                    y += 30
-                    report.insert_text((50, y), f"FIX: {item['replacement_text']}", fontsize=10)
-                    y += 40
+                # Cleanup output
+                raw_content = response.choices[0].message.content.replace("```json", "").replace("```", "").strip()
+                audit_items = json.loads(raw_content)
+
+                st.success(f"Audit Complete! Identified {len(audit_items)} improvements.")
                 
-                st.download_button("📥 Download Report", data=pdf.write(), file_name="AUDIT.pdf", mime="application/pdf")
-                st.success("Audit complete.")
-            except Exception as e:
-                st.error(f"Engine Failure: {e}")
+                # Display Results
+                for item in audit_items:
+                    action = item.get("action", "MODIFY")
+                    st.write(f"**{action} #{item.get('tag_id')}**: {item.get('issue')}")
+                    st.code(item.get("replacement_text"), language="text")
+
+        except Exception as e:
+            st.error(f"Engine Error: {str(e)}")
