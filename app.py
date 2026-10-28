@@ -2,8 +2,8 @@ import streamlit as st
 import openai
 import base64
 
-st.set_page_config(page_title="NEO 1.5 Quality Gate", layout="wide")
-st.title("NEO 1.5 Automated ISO GPS Quality Gate")
+st.set_page_config(page_title="Quality Gate", layout="wide")
+st.title("Automated ISO GPS Quality Gate")
 
 with st.sidebar:
     st.header("Configuration")
