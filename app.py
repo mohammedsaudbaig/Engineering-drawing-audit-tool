@@ -39,7 +39,11 @@ uploaded_file = st.file_uploader("Upload Drawing PDF or Screenshot", type=["pdf"
 
 if uploaded_file and api_key:
     if st.button("Generate Audit Report"):
-        client = openai.OpenAI(api_key=api_key)
+                # You MUST get the Base URL from your API provider's dashboard
+        client = openai.OpenAI(
+            api_key=api_key, 
+            base_url="https://api.anyapi.ai/v1" # <--- REPLACE WITH YOUR PROVIDER'S URL
+        )
         
         with st.spinner("Analyzing part geometry and ISO compliance..."):
             # Here we send the image and the prompt to the AI
