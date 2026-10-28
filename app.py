@@ -1,24 +1,26 @@
 import streamlit as st
-import requests
-import fitz
-import io
-import json
+import google.generativeai as genai
 from PIL import Image
+import io
+import fitz
+import json
 
 st.set_page_config(page_title="NEO 1.5 Quality Gate", layout="wide")
 st.title("Automated ISO GPS Quality Gate")
 
+# 1. Config: Use Gemini native SDK
 with st.sidebar:
-    api_key = st.secrets.get("OPENAI_API_KEY")
-    api_url = "https://api.xkiro.com/v1/chat/completions" # Direct endpoint
+    api_key = st.secrets.get("GEMINI_API_KEY")
+    genai.configure(api_key=api_key)
+    model = genai.GenerativeModel('gemini-1.5-flash') # Native, stable model
 
 drawing_file = st.file_uploader("Upload Drawing", type=["png", "jpg", "jpeg", "pdf"])
 
 if drawing_file and api_key:
-    if st.button("Generate Pro Audit Report", type="primary"):
+    if st.button("Generate Pro Audit Report"):
         with st.spinner("Processing..."):
             try:
-                # 1. Process Image
+                # Process File
                 file_bytes = drawing_file.read()
                 if drawing_file.name.lower().endswith(".pdf"):
                     doc = fitz.open(stream=file_bytes, filetype="pdf")
@@ -27,36 +29,28 @@ if drawing_file and api_key:
                 else:
                     img = Image.open(io.BytesIO(file_bytes)).convert("RGB")
                 
-                # 2. Raw HTTP Request (Bypasses OpenAI library issues)
-                headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
-                payload = {
-                    "model": "google/gemini-3.6-flash",
-                    "messages": [{"role": "user", "content": "Analyze drawing for ISO GPS violations. Return valid JSON only: [{'tag_id': 1, 'action': 'MODIFY', 'issue': '...', 'replacement_text': '...'}]"}]
-                }
+                # Native Generation
+                prompt = "Analyze this drawing for ISO GPS violations (ISO 1101, 5459, 14405-1). Return STRICT JSON format: [{\"tag_id\": 1, \"action\": \"DELETE|MODIFY|ADD\", \"box_2d\": [ymin, xmin, ymax, xmax], \"issue\": \"...\", \"replacement_text\": \"...\"}]"
                 
-                response = requests.post(api_url, headers=headers, json=payload, timeout=60)
-                
-                if response.status_code != 200:
-                    st.error(f"API Error ({response.status_code}): {response.text}")
-                    st.stop()
+                response = model.generate_content([prompt, img])
+                audit_data = json.loads(response.text.replace("```json", "").replace("```", "").strip())
 
-                audit_data = json.loads(response.json()['choices'][0]['message']['content'])
-
-                # 3. PDF generation
+                # PDF Report (Internal)
                 pdf = fitz.open()
                 p1 = pdf.new_page(width=img.width, height=img.height)
-                img_bytes = io.BytesIO()
-                img.save(img_bytes, format="JPEG")
-                p1.insert_image(p1.rect, stream=img_bytes.getvalue())
+                img_buf = io.BytesIO()
+                img.save(img_buf, format="JPEG")
+                p1.insert_image(p1.rect, stream=img_buf.getvalue())
                 
-                report = pdf.new_page(width=612, height=792)
+                report = pdf.new_page(width=595, height=842)
                 y = 50
                 for item in audit_data:
-                    report.insert_text((50, y), f"TAG #{item['tag_id']} | {item['action']}: {item['issue']}", fontsize=12)
+                    report.insert_text((50, y), f"TAG #{item['tag_id']} | {item['issue']}", fontsize=12)
                     y += 30
                     report.insert_text((50, y), f"FIX: {item['replacement_text']}", fontsize=10)
                     y += 40
                 
-                st.download_button("📥 Download Audit Report", data=pdf.write(), file_name="ISO_AUDIT.pdf", mime="application/pdf")
+                st.download_button("📥 Download Report", data=pdf.write(), file_name="AUDIT.pdf", mime="application/pdf")
+                st.success("Audit complete.")
             except Exception as e:
-                st.error(f"Failed: {e}")
+                st.error(f"Engine Failure: {e}")
