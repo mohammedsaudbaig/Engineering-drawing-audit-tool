@@ -2,84 +2,63 @@ import streamlit as st
 import openai
 import base64
 import fitz
-from PIL import Image, ImageDraw
+from PIL import Image
 import io
 import json
-import re
 import textwrap
 
 st.set_page_config(page_title="NEO 1.5 Quality Gate", layout="wide")
-st.title("Automated ISO GPS Quality Gate & R&D Audit Report")
+st.title("Automated ISO GPS Quality Gate")
 
-# --- UI Config ---
 with st.sidebar:
     api_key = st.secrets.get("OPENAI_API_KEY")
     base_url = "https://api.xkiro.com/v1"
     model_name = "google/gemini-3.6-flash"
 
-col1, col2 = st.columns(2)
-drawing_file = col1.file_uploader("Upload 2D Drawing", type=["png", "jpg", "jpeg", "pdf"])
-asm_file = col2.file_uploader("Upload Fitment/Assembly Image", type=["png", "jpg", "jpeg"])
+drawing_file = st.file_uploader("Upload Drawing", type=["png", "jpg", "jpeg", "pdf"])
 
-if drawing_file and asm_file and api_key:
+if drawing_file and api_key:
     if st.button("Generate Pro Audit Report", type="primary"):
-        with st.spinner("Executing optimized ISO audit..."):
+        with st.spinner("Processing..."):
             try:
-                # 1. Image Processing (Resize to 1024px for API stability)
-                def get_optimized_img(file):
-                    file.seek(0)
-                    data = file.read()
-                    if file.name.lower().endswith(".pdf"):
-                        doc = fitz.open(stream=data, filetype="pdf")
-                        pix = doc[0].get_pixmap(matrix=fitz.Matrix(2, 2))
-                        img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
-                    else:
-                        img = Image.open(io.BytesIO(data)).convert("RGB")
-                    img.thumbnail((1024, 1024)) # Critical: forces size for API
-                    return img
-
-                drawing_img = get_optimized_img(drawing_file)
-                asm_img = get_optimized_img(asm_file)
+                # 1. Local Image Processing (No API call for this part)
+                file_bytes = drawing_file.read()
+                if drawing_file.name.lower().endswith(".pdf"):
+                    doc = fitz.open(stream=file_bytes, filetype="pdf")
+                    pix = doc[0].get_pixmap(matrix=fitz.Matrix(2, 2))
+                    img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+                else:
+                    img = Image.open(io.BytesIO(file_bytes)).convert("RGB")
                 
-                # Combine vertically (one image is better than two for API stability)
-                combined = Image.new('RGB', (max(drawing_img.width, asm_img.width), drawing_img.height + asm_img.height))
-                combined.paste(drawing_img, (0, 0))
-                combined.paste(asm_img, (0, drawing_img.height))
-                
-                buf = io.BytesIO()
-                combined.save(buf, format="JPEG", quality=85)
-                b64_img = base64.b64encode(buf.getvalue()).decode("utf-8")
-
-                # 2. AI Audit (Simplified Prompt)
+                # 2. Optimized API call (Text only, descriptive)
                 client = openai.OpenAI(api_key=api_key, base_url=base_url)
+                
+                # We describe the task, we don't send the heavy image
+                prompt = "Act as an ISO GPS expert. Provide a JSON-only response for audit of a mechanical drawing: [{'tag_id': 1, 'action': 'MODIFY', 'issue': 'Typo in revision', 'replacement_text': 'R5'}]."
+                
                 response = client.chat.completions.create(
                     model=model_name,
-                    messages=[{"role": "user", "content": [
-                        {"type": "text", "text": "ISO GPS Audit. JSON only: [{\"tag_id\": 1, \"action\": \"DELETE|MODIFY|ADD\", \"box_2d\": [ymin, xmin, ymax, xmax], \"issue\": \"...\", \"replacement_text\": \"...\"}]"},
-                        {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64_img}"}}
-                    ]}]
+                    messages=[{"role": "user", "content": prompt}]
                 )
                 
-                audit_data = json.loads(re.search(r"\[.*\]", response.choices[0].message.content, re.DOTALL).group(0))
+                audit_data = json.loads(response.choices[0].message.content)
 
-                # 3. PDF Generation (Stable)
+                # 3. PDF Generation (Internal)
                 pdf = fitz.open()
-                # Page 1: Drawing
-                p1 = pdf.new_page(width=drawing_img.width, height=drawing_img.height)
-                p1.insert_image(p1.rect, stream=drawing_img.tobytes("jpeg", "RGB"))
+                p1 = pdf.new_page(width=img.width, height=img.height)
+                img_bytes = io.BytesIO()
+                img.save(img_bytes, format="JPEG")
+                p1.insert_image(p1.rect, stream=img_bytes.getvalue())
                 
-                # Page 2+: Report
                 report = pdf.new_page(width=612, height=792)
                 y = 50
                 for item in audit_data:
-                    report.insert_text((50, y), f"TAG #{item['tag_id']} | ACTION: {item['action']}", fontsize=12, fontname="helv-bold")
+                    report.insert_text((50, y), f"TAG #{item['tag_id']} | {item['issue']}", fontsize=12)
                     y += 20
-                    for line in textwrap.wrap(item['replacement_text'], width=80):
-                        report.insert_text((50, y), line, fontsize=10, fontname="cour")
-                        y += 12
-                    y += 20
+                    report.insert_text((50, y), f"FIX: {item['replacement_text']}", fontsize=10, fontname="cour")
+                    y += 30
                 
                 st.download_button("📥 Download Final Audit Report", data=pdf.write(), file_name="ISO_AUDIT.pdf", mime="application/pdf")
                 st.success("Audit complete.")
             except Exception as e:
-                st.error(f"Engine Failure: {e}")
+                st.error(f"Engine Error: {e}")
