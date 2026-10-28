@@ -9,7 +9,8 @@ st.subheader("Mass Production / QC Release Audit Engine")
 # Sidebar for Setup
 with st.sidebar:
     st.header("Configuration")
-    api_key = st.text_input("Enter OpenAI API Key", type="password", help="Needed for the AI reasoning engine.")
+        # Pulls directly from your secure Streamlit settings
+    api_key = st.secrets["OPENAI_API_KEY"]
     part_type = st.selectbox("Select Part Functional Interface:", 
                              ["Machined Prismatic", "Rotating Dynamic (Shaft/Hub)", "Sheet Metal/Weldment"])
 
