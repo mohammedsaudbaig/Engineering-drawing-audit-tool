@@ -13,7 +13,7 @@ st.title("Automated ISO GPS Quality Gate")
 with st.sidebar:
     st.header("Configuration")
     api_key = st.secrets.get("OPENAI_API_KEY")
-    base_url = st.text_input("API Base URL", value="https://api.xkiro.com/v1")
+    base_url = st.text_input("API Base URL", value="https://api.anyapi.ai/v1")
     model_name = st.text_input("Model Name", value="google/gemini-3.6-flash")
 
 uploaded_file = st.file_uploader("Upload Drawing", type=["png", "jpg", "jpeg", "pdf"])
